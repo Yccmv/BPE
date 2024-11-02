@@ -64,7 +64,7 @@
     </div>
 
     <script>
-        // Funzione di debug
+        // Funzione di debug avanzata
         const debug = (message, data) => {
             const debugOutput = document.getElementById('debug-output');
             const timestamp = new Date().toISOString();
@@ -72,9 +72,13 @@
             
             if (data) {
                 if (data instanceof Uint8Array) {
-                    debugMessage += `Data (first 50 bytes): ${Array.from(data.slice(0, 50)).map(b => b.toString(16).padStart(2, '0')).join(' ')}\n`;
+                    debugMessage += `Data (first 100 bytes): ${Array.from(data.slice(0, 100)).map(b => b.toString(16).padStart(2, '0')).join(' ')}\n`;
                 } else {
-                    debugMessage += `Data: ${JSON.stringify(data, null, 2)}\n`;
+                    try {
+                        debugMessage += `Data: ${JSON.stringify(data, null, 2)}\n`;
+                    } catch (e) {
+                        debugMessage += `Data: [Non-serializable Object]\n`;
+                    }
                 }
             }
             
@@ -82,75 +86,187 @@
             debugOutput.scrollTop = debugOutput.scrollHeight;
         };
 
-        // Funzioni di utilità per l'analisi ASN.1
+        // ASN.1 Parser migliorato
         const ASN1 = {
-            CLASS_UNIVERSAL: 0,
-            CLASS_APPLICATION: 1,
-            CLASS_CONTEXT: 2,
-            CLASS_PRIVATE: 3,
+            // Costanti ASN.1
+            TAG_SEQUENCE: 0x30,
+            TAG_SET: 0x31,
+            TAG_OCTET_STRING: 0x04,
+            TAG_OBJECT_IDENTIFIER: 0x06,
 
-            TYPE_SEQUENCE: 0x30,
-            TYPE_OCTET_STRING: 0x04,
+            // OID conosciuti
+            KNOWN_OIDS: {
+                '1.2.840.113549.1.7.1': 'data',
+                '1.2.840.113549.1.7.2': 'signedData',
+            },
+
+            // Decodifica un intero dalla rappresentazione ASN.1 DER
+            decodeInteger: function(data, offset, length) {
+                let value = 0;
+                for (let i = 0; i < length; i++) {
+                    value = (value << 8) | data[offset + i];
+                }
+                return value;
+            },
 
             // Decodifica la lunghezza ASN.1
             decodeLength: function(data, offset) {
-                let length = data[offset];
+                const initialByte = data[offset];
                 offset++;
 
-                if (length & 0x80) {
-                    const numberOfLengthBytes = length & 0x7F;
-                    length = 0;
-                    for (let i = 0; i < numberOfLengthBytes; i++) {
-                        length = (length << 8) | data[offset];
-                        offset++;
+                if (initialByte & 0x80) {
+                    const numBytes = initialByte & 0x7F;
+                    let length = 0;
+                    
+                    for (let i = 0; i < numBytes; i++) {
+                        length = (length << 8) | data[offset + i];
                     }
+                    
+                    return {
+                        length: length,
+                        offset: offset + numBytes
+                    };
                 }
-                return { length, offset };
+
+                return {
+                    length: initialByte,
+                    offset: offset
+                };
             },
 
-            // Trova il contenuto effettivo del file all'interno della struttura P7M
-            findContent: function(data) {
-                let offset = 0;
+            // Decodifica un OID
+            decodeOID: function(data, offset, length) {
+                const bytes = Array.from(data.slice(offset, offset + length));
+                const first = bytes[0];
+                const values = [Math.floor(first / 40), first % 40];
                 
-                // Salta l'header della struttura PKCS#7
-                while (offset < data.length) {
-                    const tag = data[offset];
-                    offset++;
-
-                    // Se troviamo un OCTET STRING, potrebbe essere il nostro contenuto
-                    if (tag === this.TYPE_OCTET_STRING) {
-                        const lengthInfo = this.decodeLength(data, offset);
-                        offset = lengthInfo.offset;
-                        
-                        // Verifica se è un PDF controllando la signature
-                        const possibleContent = data.slice(offset);
-                        if (this.isPDF(possibleContent)) {
-                            debug('PDF content found at offset', { offset });
-                            return possibleContent;
-                        }
+                let value = 0;
+                for (let i = 1; i < bytes.length; i++) {
+                    if (bytes[i] & 0x80) {
+                        value = (value << 7) | (bytes[i] & 0x7F);
                     } else {
-                        // Se non è un OCTET STRING, salta questo campo
-                        const lengthInfo = this.decodeLength(data, offset);
-                        offset = lengthInfo.offset + lengthInfo.length;
+                        value = (value << 7) | bytes[i];
+                        values.push(value);
+                        value = 0;
                     }
+                }
+                
+                return values.join('.');
+            },
 
-                    // Controllo di sicurezza
-                    if (offset >= data.length) {
+            // Analizza un TLV (Tag-Length-Value)
+            parseTLV: function(data, offset) {
+                const tag = data[offset];
+                offset++;
+                
+                const lengthInfo = this.decodeLength(data, offset);
+                const length = lengthInfo.length;
+                offset = lengthInfo.offset;
+                
+                return {
+                    tag: tag,
+                    length: length,
+                    valueOffset: offset,
+                    nextOffset: offset + length
+                };
+            },
+
+            // Estrai il contenuto del file P7M
+            extractContent: function(data) {
+                debug('Starting content extraction', { dataLength: data.length });
+                
+                let offset = 0;
+                const contentStack = [];
+                
+                while (offset < data.length) {
+                    try {
+                        const tlv = this.parseTLV(data, offset);
+                        debug('Parsed TLV', { tag: tlv.tag.toString(16), length: tlv.length, offset });
+
+                        // Se troviamo un OCTET STRING che sembra contenere il file originale
+                        if (tlv.tag === this.TAG_OCTET_STRING) {
+                            const content = data.slice(tlv.valueOffset, tlv.valueOffset + tlv.length);
+                            
+                            // Verifica se sembra un contenuto valido
+                            if (this.isValidContent(content)) {
+                                debug('Found valid content', { contentLength: content.length });
+                                return content;
+                            }
+                            
+                            contentStack.push(content);
+                        }
+                        
+                        // Procedi al prossimo TLV
+                        offset = tlv.nextOffset;
+                        
+                    } catch (error) {
+                        debug('Error parsing TLV', { error: error.message, offset });
                         break;
+                    }
+                }
+                
+                // Se non abbiamo trovato il contenuto nel parsing normale,
+                // proviamo l'ultimo OCTET STRING trovato
+                if (contentStack.length > 0) {
+                    const lastContent = contentStack[contentStack.length - 1];
+                    if (this.isValidContent(lastContent)) {
+                        debug('Using last found content', { contentLength: lastContent.length });
+                        return lastContent;
                     }
                 }
                 
                 throw new Error("Contenuto non trovato nella struttura P7M");
             },
 
-            // Verifica se i dati iniziano con la signature PDF
+            // Verifica se il contenuto sembra valido
+            isValidContent: function(data) {
+                // Verifica se è un PDF
+                if (this.isPDF(data)) return true;
+                
+                // Verifica se è un XML
+                if (this.isXML(data)) return true;
+                
+                // Verifica se è un file di testo
+                if (this.isText(data)) return true;
+                
+                // Altri controlli possono essere aggiunti qui
+                
+                return false;
+            },
+
+            // Verifica se i dati sembrano essere un PDF
             isPDF: function(data) {
-                const pdfSignature = [0x25, 0x50, 0x44, 0x46]; // %PDF
-                return pdfSignature.every((byte, i) => data[i] === byte);
+                const signature = "%PDF";
+                return signature.split('').every((char, i) => data[i] === char.charCodeAt(0));
+            },
+
+            // Verifica se i dati sembrano essere XML
+            isXML: function(data) {
+                // Cerca "<?xml" all'inizio del file
+                const signature = "<?xml";
+                return signature.split('').every((char, i) => data[i] === char.charCodeAt(0));
+            },
+
+            // Verifica se i dati sembrano essere testo
+            isText: function(data) {
+                // Controlla i primi byte per vedere se sono caratteri ASCII validi
+                const sampleSize = Math.min(100, data.length);
+                let textCount = 0;
+                
+                for (let i = 0; i < sampleSize; i++) {
+                    if ((data[i] >= 32 && data[i] <= 126) || // ASCII printable
+                        data[i] === 9 || // tab
+                        data[i] === 10 || // newline
+                        data[i] === 13) { // carriage return
+                        textCount++;
+                    }
+                }
+                
+                return (textCount / sampleSize) > 0.8; // 80% dei caratteri sono testo
             }
         };
 
-        // React component
+// React component
         const e = React.createElement;
         
         const App = () => {
@@ -158,7 +274,14 @@
             const [processing, setProcessing] = React.useState(false);
             const [dragOver, setDragOver] = React.useState(false);
             const [zipName, setZipName] = React.useState('extracted_files');
+            const [progress, setProgress] = React.useState({ current: 0, total: 0 });
+            const [errors, setErrors] = React.useState([]);
             
+            const resetState = () => {
+                setProgress({ current: 0, total: 0 });
+                setErrors([]);
+            };
+
             const handleDragOver = (e) => {
                 e.preventDefault();
                 setDragOver(true);
@@ -176,21 +299,32 @@
                     file => file.name.toLowerCase().endsWith('.p7m')
                 );
                 
+                if (droppedFiles.length === 0) {
+                    alert('Per favore, seleziona solo file .p7m');
+                    return;
+                }
+                
                 setFiles(prevFiles => [...prevFiles, ...droppedFiles]);
-                debug('Files dropped', droppedFiles.map(f => f.name));
+                debug('Files dropped', droppedFiles.map(f => ({ name: f.name, size: f.size })));
             };
             
             const handleFileSelect = (e) => {
                 const selectedFiles = Array.from(e.target.files).filter(
                     file => file.name.toLowerCase().endsWith('.p7m')
                 );
+                
+                if (selectedFiles.length === 0) {
+                    alert('Per favore, seleziona solo file .p7m');
+                    return;
+                }
+                
                 setFiles(prevFiles => [...prevFiles, ...selectedFiles]);
-                debug('Files selected', selectedFiles.map(f => f.name));
+                debug('Files selected', selectedFiles.map(f => ({ name: f.name, size: f.size })));
             };
             
             const extractFile = async (file) => {
                 try {
-                    debug('Starting extraction for file', file.name);
+                    debug('Starting extraction for file', { name: file.name, size: file.size });
                     
                     // Leggi il file come ArrayBuffer
                     const arrayBuffer = await file.arrayBuffer();
@@ -200,58 +334,128 @@
                     const data = new Uint8Array(arrayBuffer);
                     debug('Converted to Uint8Array', data);
                     
-                    // Cerca il contenuto del file utilizzando l'analisi ASN.1
-                    const content = ASN1.findContent(data);
-                    debug('Content extracted', content);
+                    // Estrai il contenuto usando il parser ASN.1 migliorato
+                    const content = ASN1.extractContent(data);
+                    
+                    if (!content || content.length === 0) {
+                        throw new Error("Contenuto estratto vuoto o non valido");
+                    }
+                    
+                    debug('Content extracted successfully', { 
+                        contentLength: content.length,
+                        isPDF: ASN1.isPDF(content),
+                        isXML: ASN1.isXML(content),
+                        isText: ASN1.isText(content)
+                    });
                     
                     return {
-                        fileName: file.name.slice(0, -4),
-                        content: content
+                        fileName: file.name.slice(0, -4), // Rimuove .p7m
+                        content: content,
+                        originalName: file.name
                     };
                 } catch (error) {
-                    debug('Error during extraction', error.message);
-                    console.error('Errore durante l\'estrazione:', error);
-                    return null;
+                    debug('Error during extraction', { 
+                        fileName: file.name,
+                        error: error.message,
+                        stack: error.stack
+                    });
+                    throw error;
                 }
             };
             
             const processFiles = async () => {
                 debug('Starting batch processing');
                 setProcessing(true);
+                resetState();
                 
                 const results = {
                     success: 0,
-                    failed: 0
+                    failed: 0,
+                    errors: []
                 };
 
                 const zip = new JSZip();
+                setProgress({ current: 0, total: files.length });
                 
-                for (const file of files) {
-                    const extractedData = await extractFile(file);
-                    if (extractedData) {
-                        zip.file(extractedData.fileName, extractedData.content);
-                        results.success++;
-                    } else {
+                for (const [index, file] of files.entries()) {
+                    try {
+                        debug(`Processing file ${index + 1}/${files.length}`, file.name);
+                        const extractedData = await extractFile(file);
+                        
+                        if (extractedData && extractedData.content) {
+                            zip.file(extractedData.fileName, extractedData.content);
+                            results.success++;
+                        } else {
+                            throw new Error("Dati estratti non validi");
+                        }
+                    } catch (error) {
                         results.failed++;
+                        results.errors.push({
+                            fileName: file.name,
+                            error: error.message
+                        });
+                        setErrors(prev => [...prev, `Errore con ${file.name}: ${error.message}`]);
+                    } finally {
+                        setProgress(prev => ({ ...prev, current: index + 1 }));
                     }
                 }
 
-                // Genera il file ZIP
-                const zipBlob = await zip.generateAsync({type: "blob"});
-                
-                // Crea un oggetto <a> per il download
-                const zipFileName = `${zipName}.zip`;
-                saveAs(zipBlob, zipFileName);
+                try {
+                    debug('Generating ZIP file', { 
+                        successCount: results.success,
+                        failedCount: results.failed
+                    });
+                    
+                    // Genera il file ZIP con compressione
+                    const zipBlob = await zip.generateAsync({
+                        type: "blob",
+                        compression: "DEFLATE",
+                        compressionOptions: {
+                            level: 6
+                        }
+                    });
+                    
+                    // Scarica il file ZIP
+                    const zipFileName = `${zipName}.zip`;
+                    saveAs(zipBlob, zipFileName);
+                    
+                    debug('ZIP file generated and downloaded', { 
+                        fileName: zipFileName,
+                        size: zipBlob.size
+                    });
+                } catch (error) {
+                    debug('Error generating ZIP', error);
+                    alert(`Errore durante la generazione del file ZIP: ${error.message}`);
+                }
                 
                 setProcessing(false);
                 setFiles([]);
                 
-                const message = `Estrazione completata!\n\nFile elaborati con successo: ${results.success}\nFile non elaborati: ${results.failed}`;
-                debug('Batch processing completed', results);
+                const message = [
+                    'Estrazione completata!',
+                    '',
+                    `File elaborati con successo: ${results.success}`,
+                    `File non elaborati: ${results.failed}`,
+                    results.errors.length > 0 ? '\nErrori riscontrati:' : '',
+                    ...results.errors.map(err => `- ${err.fileName}: ${err.error}`)
+                ].join('\n');
+                
                 alert(message);
             };
             
+            const removeFile = (index) => {
+                setFiles(prevFiles => prevFiles.filter((_, i) => i !== index));
+                resetState();
+            };
+
+            const clearAll = () => {
+                setFiles([]);
+                resetState();
+            };
+            
+            // Rendering dell'interfaccia
             return e('div', { className: 'bg-white rounded-lg shadow p-6' },
+                // Drop zone
                 e('div', {
                     className: `drop-zone p-8 text-center rounded-lg mb-6 ${dragOver ? 'dragover' : ''}`,
                     onDragOver: handleDragOver,
@@ -274,10 +478,20 @@
                     ),
                     e('p', { className: 'text-gray-500' }, 'o trascina i file qui')
                 ),
+                
+                // Lista file e controlli
                 files.length > 0 && e('div', {},
-                    e('h3', { className: 'text-lg font-semibold mb-3' },
-                        `File selezionati (${files.length}):`,
+                    e('div', { className: 'flex justify-between items-center mb-3' },
+                        e('h3', { className: 'text-lg font-semibold' },
+                            `File selezionati (${files.length}):`
+                        ),
+                        e('button', {
+                            onClick: clearAll,
+                            className: 'text-red-500 hover:text-red-700 text-sm'
+                        }, 'Rimuovi tutti')
                     ),
+                    
+                    // Nome del file ZIP
                     e('div', { className: 'mb-4' },
                         e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' },
                             'Nome del file ZIP:'
@@ -289,20 +503,65 @@
                             className: 'w-full px-3 py-2 border rounded-md'
                         })
                     ),
+                    
+                    // Lista file
                     e('ul', { className: 'mb-4 max-h-48 overflow-y-auto' },
                         files.map((file, index) =>
                             e('li', {
                                 key: index,
                                 className: 'file-item flex justify-between items-center p-2 border-b'
                             },
-                                e('span', { className: 'truncate' }, file.name),
+                                e('span', { className: 'truncate flex-1' }, file.name),
+                                e('span', { className: 'text-gray-500 text-sm mx-2' },
+                                    `${(file.size / 1024).toFixed(1)} KB`
+                                ),
                                 e('button', {
-                                    onClick: () => setFiles(files.filter((_, i) => i !== index)),
+                                    onClick: () => removeFile(index),
                                     className: 'text-red-500 hover:text-red-700 ml-2'
                                 }, '×')
                             )
                         )
                     ),
+                    
+                    // Barra di progresso
+                    progress.total > 0 && e('div', { className: 'mb-4' },
+                        e('div', { className: 'relative pt-1' },
+                            e('div', { className: 'flex mb-2 items-center justify-between' },
+                                e('div', null,
+                                    e('span', { className: 'text-xs font-semibold inline-block text-blue-600' },
+                                        `Progresso: ${progress.current}/${progress.total} file`
+                                    )
+                                ),
+                                e('div', null,
+                                    e('span', { className: 'text-xs font-semibold inline-block text-blue-600' },
+                                        `${Math.round((progress.current / progress.total) * 100)}%`
+                                    )
+                                )
+                            ),
+                            e('div', { className: 'overflow-hidden h-2 mb-4 text-xs flex rounded bg-blue-200' },
+                                e('div', {
+                                    style: {
+                                        width: `${(progress.current / progress.total) * 100}%`
+                                    },
+                                    className: 'shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500'
+                                })
+                            )
+                        )
+                    ),
+                    
+                    // Lista errori
+                    errors.length > 0 && e('div', { className: 'mb-4' },
+                        e('div', { className: 'bg-red-50 text-red-500 p-3 rounded' },
+                            e('h4', { className: 'font-semibold mb-2' }, 'Errori:'),
+                            e('ul', { className: 'text-sm' },
+                                errors.map((error, index) =>
+                                    e('li', { key: index, className: 'mb-1' }, error)
+                                )
+                            )
+                        )
+                    ),
+                    
+                    // Pulsante elaborazione
                     e('button', {
                         onClick: processFiles,
                         disabled: processing,
