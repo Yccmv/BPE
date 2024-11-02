@@ -12,8 +12,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     
-    <!-- CryptoJS -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <!-- JSZip -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <!-- FileSaver -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 
     <style>
         .drop-zone {
@@ -86,6 +89,7 @@
             const [files, setFiles] = React.useState([]);
             const [processing, setProcessing] = React.useState(false);
             const [dragOver, setDragOver] = React.useState(false);
+            const [zipName, setZipName] = React.useState('extracted_files');
             
             const handleDragOver = (e) => {
                 e.preventDefault();
@@ -129,7 +133,6 @@
                     debug('Converted to Uint8Array', data);
                     
                     // Cerca il contenuto del file originale
-                    // Il contenuto dovrebbe essere dopo il sequence identifier 0x30
                     let contentStart = -1;
                     for (let i = 0; i < data.length - 4; i++) {
                         if (data[i] === 0x30 && data[i + 1] === 0x82) {
@@ -148,25 +151,14 @@
                     const content = data.slice(contentStart);
                     debug('Content extracted', content);
                     
-                    // Crea il blob e scarica
-                    const fileName = file.name.slice(0, -4); // Rimuove .p7m
-                    const blob = new Blob([content], { type: 'application/octet-stream' });
-                    const url = URL.createObjectURL(blob);
-                    
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = fileName;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    
-                    debug('File extracted successfully', fileName);
-                    return true;
+                    return {
+                        fileName: file.name.slice(0, -4),
+                        content: content
+                    };
                 } catch (error) {
                     debug('Error during extraction', error.message);
                     console.error('Errore durante l\'estrazione:', error);
-                    return false;
+                    return null;
                 }
             };
             
@@ -178,15 +170,25 @@
                     success: 0,
                     failed: 0
                 };
+
+                const zip = new JSZip();
                 
                 for (const file of files) {
-                    const success = await extractFile(file);
-                    if (success) {
+                    const extractedData = await extractFile(file);
+                    if (extractedData) {
+                        zip.file(extractedData.fileName, extractedData.content);
                         results.success++;
                     } else {
                         results.failed++;
                     }
                 }
+
+                // Genera il file ZIP
+                const zipBlob = await zip.generateAsync({type: "blob"});
+                
+                // Crea un oggetto <a> per il download
+                const zipFileName = `${zipName}.zip`;
+                saveAs(zipBlob, zipFileName);
                 
                 setProcessing(false);
                 setFiles([]);
@@ -223,6 +225,17 @@
                     e('h3', { className: 'text-lg font-semibold mb-3' },
                         `File selezionati (${files.length}):`,
                     ),
+                    e('div', { className: 'mb-4' },
+                        e('label', { className: 'block text-sm font-medium text-gray-700 mb-1' },
+                            'Nome del file ZIP:'
+                        ),
+                        e('input', {
+                            type: 'text',
+                            value: zipName,
+                            onChange: (e) => setZipName(e.target.value),
+                            className: 'w-full px-3 py-2 border rounded-md'
+                        })
+                    ),
                     e('ul', { className: 'mb-4 max-h-48 overflow-y-auto' },
                         files.map((file, index) =>
                             e('li', {
@@ -245,7 +258,7 @@
                                 ? 'bg-gray-400 cursor-not-allowed'
                                 : 'bg-green-500 hover:bg-green-600'
                         } text-white transition-colors`
-                    }, processing ? 'Elaborazione in corso...' : 'Estrai File')
+                    }, processing ? 'Elaborazione in corso...' : 'Estrai e Scarica ZIP')
                 )
             );
         };
