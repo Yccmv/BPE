@@ -12,9 +12,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     
-    <!-- ASN1.js e dipendenze (versioni compatibili) -->
-    <script src="https://unpkg.com/asn1js@2.0.26/build/index.js"></script>
-    <script src="https://unpkg.com/pkijs@2.1.90/build/index.js"></script>
+    <!-- Node-Forge per la decodifica P7M -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/forge/1.3.1/forge.min.js"></script>
 
     <style>
         .drop-zone {
@@ -51,10 +50,6 @@
     </div>
 
     <script>
-        // Inizializzazione PKI.js
-        const pkijs = window.pkijs;
-        const asn1js = window.asn1js;
-        
         // React component
         const e = React.createElement;
         
@@ -93,27 +88,31 @@
             const extractFile = async (file) => {
                 try {
                     const arrayBuffer = await file.arrayBuffer();
-                    const asn1Data = asn1js.fromBER(arrayBuffer);
+                    const byteArray = new Uint8Array(arrayBuffer);
+                    const p7mBytes = forge.util.createBuffer(byteArray);
                     
-                    if (asn1Data.offset === (-1)) {
-                        throw new Error("Errore di parsing ASN1");
-                    }
-
-                    // Lettura della struttura P7M
-                    const signedData = new pkijs.SignedData({ schema: asn1Data.result });
-                    await signedData.verify(); // Verifica la firma (opzionale)
+                    // Decodifica ASN.1
+                    const asn1 = forge.asn1.fromDer(p7mBytes);
                     
-                    // Estrazione del contenuto originale
-                    const contentInfo = signedData.encapContentInfo;
-                    if (!contentInfo || !contentInfo.eContent) {
+                    // Parse della struttura PKCS#7
+                    const p7 = forge.pkcs7.messageFromAsn1(asn1);
+                    
+                    // Estrazione del contenuto
+                    let content;
+                    if (p7.content) {
+                        content = p7.content;
+                    } else {
                         throw new Error("Contenuto non trovato nel file P7M");
                     }
-
-                    const content = contentInfo.eContent.valueBlock.valueHex;
-                    const fileName = file.name.slice(0, -4); // Rimuove .p7m
                     
-                    // Download del file estratto
-                    const blob = new Blob([content]);
+                    // Preparazione del download
+                    const fileName = file.name.slice(0, -4); // Rimuove .p7m
+                    const contentArray = new Uint8Array(content.length());
+                    for (let i = 0; i < content.length(); i++) {
+                        contentArray[i] = content.getByte();
+                    }
+                    
+                    const blob = new Blob([contentArray]);
                     const url = URL.createObjectURL(blob);
                     
                     const a = document.createElement('a');
