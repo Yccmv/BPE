@@ -82,6 +82,74 @@
             debugOutput.scrollTop = debugOutput.scrollHeight;
         };
 
+        // Funzioni di utilità per l'analisi ASN.1
+        const ASN1 = {
+            CLASS_UNIVERSAL: 0,
+            CLASS_APPLICATION: 1,
+            CLASS_CONTEXT: 2,
+            CLASS_PRIVATE: 3,
+
+            TYPE_SEQUENCE: 0x30,
+            TYPE_OCTET_STRING: 0x04,
+
+            // Decodifica la lunghezza ASN.1
+            decodeLength: function(data, offset) {
+                let length = data[offset];
+                offset++;
+
+                if (length & 0x80) {
+                    const numberOfLengthBytes = length & 0x7F;
+                    length = 0;
+                    for (let i = 0; i < numberOfLengthBytes; i++) {
+                        length = (length << 8) | data[offset];
+                        offset++;
+                    }
+                }
+                return { length, offset };
+            },
+
+            // Trova il contenuto effettivo del file all'interno della struttura P7M
+            findContent: function(data) {
+                let offset = 0;
+                
+                // Salta l'header della struttura PKCS#7
+                while (offset < data.length) {
+                    const tag = data[offset];
+                    offset++;
+
+                    // Se troviamo un OCTET STRING, potrebbe essere il nostro contenuto
+                    if (tag === this.TYPE_OCTET_STRING) {
+                        const lengthInfo = this.decodeLength(data, offset);
+                        offset = lengthInfo.offset;
+                        
+                        // Verifica se è un PDF controllando la signature
+                        const possibleContent = data.slice(offset);
+                        if (this.isPDF(possibleContent)) {
+                            debug('PDF content found at offset', { offset });
+                            return possibleContent;
+                        }
+                    } else {
+                        // Se non è un OCTET STRING, salta questo campo
+                        const lengthInfo = this.decodeLength(data, offset);
+                        offset = lengthInfo.offset + lengthInfo.length;
+                    }
+
+                    // Controllo di sicurezza
+                    if (offset >= data.length) {
+                        break;
+                    }
+                }
+                
+                throw new Error("Contenuto non trovato nella struttura P7M");
+            },
+
+            // Verifica se i dati iniziano con la signature PDF
+            isPDF: function(data) {
+                const pdfSignature = [0x25, 0x50, 0x44, 0x46]; // %PDF
+                return pdfSignature.every((byte, i) => data[i] === byte);
+            }
+        };
+
         // React component
         const e = React.createElement;
         
@@ -132,23 +200,8 @@
                     const data = new Uint8Array(arrayBuffer);
                     debug('Converted to Uint8Array', data);
                     
-                    // Cerca il contenuto del file originale
-                    let contentStart = -1;
-                    for (let i = 0; i < data.length - 4; i++) {
-                        if (data[i] === 0x30 && data[i + 1] === 0x82) {
-                            contentStart = i + 4;
-                            break;
-                        }
-                    }
-                    
-                    if (contentStart === -1) {
-                        throw new Error("Struttura P7M non valida");
-                    }
-                    
-                    debug('Content start found at', { position: contentStart });
-                    
-                    // Estrai il contenuto
-                    const content = data.slice(contentStart);
+                    // Cerca il contenuto del file utilizzando l'analisi ASN.1
+                    const content = ASN1.findContent(data);
                     debug('Content extracted', content);
                     
                     return {
