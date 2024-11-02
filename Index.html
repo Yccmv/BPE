@@ -8,15 +8,13 @@
     <!-- Tailwind CSS -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
     
-    <!-- React e React DOM precompilati -->
+    <!-- React e React DOM -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     
-    <!-- ASN1.js e dipendenze -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/asn1js/3.0.5/asn1.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pvutils/1.1.3/utils.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pvtsutils/1.3.5/pvtsutils.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pkijs/3.0.5/pkijs.min.js"></script>
+    <!-- ASN1.js e dipendenze (versioni compatibili) -->
+    <script src="https://unpkg.com/asn1js@2.0.26/build/index.js"></script>
+    <script src="https://unpkg.com/pkijs@2.1.90/build/index.js"></script>
 
     <style>
         .drop-zone {
@@ -53,7 +51,11 @@
     </div>
 
     <script>
-        // React component precompilato
+        // Inizializzazione PKI.js
+        const pkijs = window.pkijs;
+        const asn1js = window.asn1js;
+        
+        // React component
         const e = React.createElement;
         
         const App = () => {
@@ -91,21 +93,26 @@
             const extractFile = async (file) => {
                 try {
                     const arrayBuffer = await file.arrayBuffer();
-                    const asn1 = asn1js.fromBER(arrayBuffer);
+                    const asn1Data = asn1js.fromBER(arrayBuffer);
                     
-                    if (asn1.offset === (-1)) {
+                    if (asn1Data.offset === (-1)) {
                         throw new Error("Errore di parsing ASN1");
                     }
 
-                    // Analisi della struttura P7M
-                    const contentInfo = new pkijs.ContentInfo({ schema: asn1.result });
-                    const signedData = new pkijs.SignedData({ schema: contentInfo.content });
+                    // Lettura della struttura P7M
+                    const signedData = new pkijs.SignedData({ schema: asn1Data.result });
+                    await signedData.verify(); // Verifica la firma (opzionale)
                     
                     // Estrazione del contenuto originale
-                    const content = signedData.encapContentInfo.eContent.valueBlock.valueHex;
+                    const contentInfo = signedData.encapContentInfo;
+                    if (!contentInfo || !contentInfo.eContent) {
+                        throw new Error("Contenuto non trovato nel file P7M");
+                    }
+
+                    const content = contentInfo.eContent.valueBlock.valueHex;
                     const fileName = file.name.slice(0, -4); // Rimuove .p7m
                     
-                    // Creazione e download del file
+                    // Download del file estratto
                     const blob = new Blob([content]);
                     const url = URL.createObjectURL(blob);
                     
@@ -147,7 +154,6 @@
                 alert(`Estrazione completata!\n\nFile elaborati con successo: ${results.success}\nFile non elaborati: ${results.failed}`);
             };
             
-            // Creazione dell'interfaccia usando React.createElement invece di JSX
             return e('div', { className: 'bg-white rounded-lg shadow p-6' },
                 e('div', {
                     className: `drop-zone p-8 text-center rounded-lg mb-6 ${dragOver ? 'dragover' : ''}`,
@@ -202,7 +208,7 @@
             );
         };
 
-        // Rendering del componente
+        // Rendering dell'applicazione
         ReactDOM.render(e(App), document.getElementById('root'));
     </script>
 </body>
