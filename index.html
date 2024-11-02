@@ -1,1 +1,257 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Estrattore P7M Online</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
+    
+    <!-- React e React DOM -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    
+    <!-- CryptoJS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
 
+    <style>
+        .drop-zone {
+            border: 2px dashed #718096;
+            transition: border-color 0.3s ease-in-out;
+        }
+        .drop-zone.dragover {
+            border-color: #4299e1;
+            background-color: #ebf8ff;
+        }
+        .file-item {
+            transition: all 0.3s ease-in-out;
+        }
+        .file-item:hover {
+            background-color: #f7fafc;
+        }
+        #debug-output {
+            font-family: monospace;
+            white-space: pre-wrap;
+            font-size: 12px;
+            padding: 10px;
+            background: #f8f8f8;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen py-8">
+        <div class="max-w-4xl mx-auto px-4">
+            <header class="text-center mb-8">
+                <h1 class="text-3xl font-bold text-gray-800 mb-2">Estrattore P7M Online</h1>
+                <p class="text-gray-600">Estrai facilmente i tuoi file P7M direttamente nel browser</p>
+            </header>
+
+            <div id="root"></div>
+
+            <div id="debug-output" class="mt-4"></div>
+
+            <footer class="mt-8 text-center text-sm text-gray-500">
+                <p>Tutte le operazioni vengono eseguite localmente nel tuo browser.</p>
+                <p>Nessun file viene caricato su server esterni.</p>
+            </footer>
+        </div>
+    </div>
+
+    <script>
+        // Funzione di debug
+        const debug = (message, data) => {
+            const debugOutput = document.getElementById('debug-output');
+            const timestamp = new Date().toISOString();
+            let debugMessage = `[${timestamp}] ${message}\n`;
+            
+            if (data) {
+                if (data instanceof Uint8Array) {
+                    debugMessage += `Data (first 50 bytes): ${Array.from(data.slice(0, 50)).map(b => b.toString(16).padStart(2, '0')).join(' ')}\n`;
+                } else {
+                    debugMessage += `Data: ${JSON.stringify(data, null, 2)}\n`;
+                }
+            }
+            
+            debugOutput.textContent += debugMessage + '\n';
+            debugOutput.scrollTop = debugOutput.scrollHeight;
+        };
+
+        // React component
+        const e = React.createElement;
+        
+        const App = () => {
+            const [files, setFiles] = React.useState([]);
+            const [processing, setProcessing] = React.useState(false);
+            const [dragOver, setDragOver] = React.useState(false);
+            
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setDragOver(true);
+            };
+            
+            const handleDragLeave = () => {
+                setDragOver(false);
+            };
+            
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setDragOver(false);
+                
+                const droppedFiles = Array.from(e.dataTransfer.files).filter(
+                    file => file.name.toLowerCase().endsWith('.p7m')
+                );
+                
+                setFiles(prevFiles => [...prevFiles, ...droppedFiles]);
+                debug('Files dropped', droppedFiles.map(f => f.name));
+            };
+            
+            const handleFileSelect = (e) => {
+                const selectedFiles = Array.from(e.target.files).filter(
+                    file => file.name.toLowerCase().endsWith('.p7m')
+                );
+                setFiles(prevFiles => [...prevFiles, ...selectedFiles]);
+                debug('Files selected', selectedFiles.map(f => f.name));
+            };
+            
+            const extractFile = async (file) => {
+                try {
+                    debug('Starting extraction for file', file.name);
+                    
+                    // Leggi il file come ArrayBuffer
+                    const arrayBuffer = await file.arrayBuffer();
+                    debug('File read as ArrayBuffer', { size: arrayBuffer.byteLength });
+                    
+                    // Converti in Uint8Array
+                    const data = new Uint8Array(arrayBuffer);
+                    debug('Converted to Uint8Array', data);
+                    
+                    // Cerca il contenuto del file originale
+                    // Il contenuto dovrebbe essere dopo il sequence identifier 0x30
+                    let contentStart = -1;
+                    for (let i = 0; i < data.length - 4; i++) {
+                        if (data[i] === 0x30 && data[i + 1] === 0x82) {
+                            contentStart = i + 4;
+                            break;
+                        }
+                    }
+                    
+                    if (contentStart === -1) {
+                        throw new Error("Struttura P7M non valida");
+                    }
+                    
+                    debug('Content start found at', { position: contentStart });
+                    
+                    // Estrai il contenuto
+                    const content = data.slice(contentStart);
+                    debug('Content extracted', content);
+                    
+                    // Crea il blob e scarica
+                    const fileName = file.name.slice(0, -4); // Rimuove .p7m
+                    const blob = new Blob([content], { type: 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = fileName;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    
+                    debug('File extracted successfully', fileName);
+                    return true;
+                } catch (error) {
+                    debug('Error during extraction', error.message);
+                    console.error('Errore durante l\'estrazione:', error);
+                    return false;
+                }
+            };
+            
+            const processFiles = async () => {
+                debug('Starting batch processing');
+                setProcessing(true);
+                
+                const results = {
+                    success: 0,
+                    failed: 0
+                };
+                
+                for (const file of files) {
+                    const success = await extractFile(file);
+                    if (success) {
+                        results.success++;
+                    } else {
+                        results.failed++;
+                    }
+                }
+                
+                setProcessing(false);
+                setFiles([]);
+                
+                const message = `Estrazione completata!\n\nFile elaborati con successo: ${results.success}\nFile non elaborati: ${results.failed}`;
+                debug('Batch processing completed', results);
+                alert(message);
+            };
+            
+            return e('div', { className: 'bg-white rounded-lg shadow p-6' },
+                e('div', {
+                    className: `drop-zone p-8 text-center rounded-lg mb-6 ${dragOver ? 'dragover' : ''}`,
+                    onDragOver: handleDragOver,
+                    onDragLeave: handleDragLeave,
+                    onDrop: handleDrop
+                },
+                    e('div', { className: 'mb-4' },
+                        e('input', {
+                            type: 'file',
+                            accept: '.p7m',
+                            multiple: true,
+                            onChange: handleFileSelect,
+                            className: 'hidden',
+                            id: 'fileInput'
+                        }),
+                        e('label', {
+                            htmlFor: 'fileInput',
+                            className: 'bg-blue-500 text-white px-4 py-2 rounded cursor-pointer hover:bg-blue-600 transition-colors'
+                        }, 'Seleziona File P7M')
+                    ),
+                    e('p', { className: 'text-gray-500' }, 'o trascina i file qui')
+                ),
+                files.length > 0 && e('div', {},
+                    e('h3', { className: 'text-lg font-semibold mb-3' },
+                        `File selezionati (${files.length}):`,
+                    ),
+                    e('ul', { className: 'mb-4 max-h-48 overflow-y-auto' },
+                        files.map((file, index) =>
+                            e('li', {
+                                key: index,
+                                className: 'file-item flex justify-between items-center p-2 border-b'
+                            },
+                                e('span', { className: 'truncate' }, file.name),
+                                e('button', {
+                                    onClick: () => setFiles(files.filter((_, i) => i !== index)),
+                                    className: 'text-red-500 hover:text-red-700 ml-2'
+                                }, '×')
+                            )
+                        )
+                    ),
+                    e('button', {
+                        onClick: processFiles,
+                        disabled: processing,
+                        className: `w-full py-2 rounded ${
+                            processing
+                                ? 'bg-gray-400 cursor-not-allowed'
+                                : 'bg-green-500 hover:bg-green-600'
+                        } text-white transition-colors`
+                    }, processing ? 'Elaborazione in corso...' : 'Estrai File')
+                )
+            );
+        };
+
+        // Rendering dell'applicazione
+        ReactDOM.render(e(App), document.getElementById('root'));
+    </script>
+</body>
+</html>
