@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Estrattore P7M Web</title>
+    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 25px;
+        }
+        .selection-frame {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .selection-frame button {
+            flex: 1;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        .selection-frame button:hover {
+            background-color: #45a049;
+        }
+        .selection-frame button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #fileList {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+            padding: 8px;
+            background-color: #f9f9f9;
+        }
+        .file-item {
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        .info-frame {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        #outputLabel {
+            flex: 1;
+            color: #555;
+        }
+        #clearButton {
+            padding: 6px 12px;
+            background-color: #f44336;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #clearButton:hover {
+            background-color: #d32f2f;
+        }
+        #clearButton:disabled {
+            background-color: #ffcccc;
+            cursor: not-allowed;
+        }
+        .progress-container {
+            margin-bottom: 20px;
+        }
+        progress {
+            width: 100%;
+            height: 20px;
+            margin-bottom: 5px;
+        }
+        #progressLabel {
+            color: #666;
+            font-size: 14px;
+            text-align: center;
+            display: block;
+        }
+        #extractButton {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        #extractButton:hover {
+            background-color: #0b7dda;
+        }
+        #extractButton:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .modal-content {
+            background-color: white;
+            margin: 15% auto;
+            padding: 20px;
+            width: 50%;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        .modal-buttons {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        .modal-buttons button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .modal-buttons .confirm {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .modal-buttons .cancel {
+            background-color: #f44336;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Estrattore P7M Web</h1>
+        <p style="text-align: center; margin-bottom: 20px; color: #666;">Estrai il contenuto di file firmati .p7m direttamente nel browser</p>
+        
+        <div class="selection-frame">
+            <button id="selectFilesButton">Seleziona File P7M</button>
+            <input type="file" id="fileInput" accept=".p7m" multiple style="display: none;">
+        </div>
+        
+        <div id="fileList"></div>
+        
+        <div class="info-frame">
+            <div id="outputLabel">Pronto per l'estrazione</div>
+            <button id="clearButton">Pulisci Lista</button>
+        </div>
+        
+        <div class="progress-container">
+            <progress id="progressBar" value="0" max="100"></progress>
+            <span id="progressLabel">Nessun file selezionato</span>
+        </div>
+        
+        <button id="extractButton">Estrai File Selezionati</button>
+    </div>
+
+    <!-- Modal di conferma per sovrascrittura -->
+    <div id="overwriteModal" class="modal">
+        <div class="modal-content">
+            <h3>Sovrascrivere file esistente?</h3>
+            <p id="overwriteMessage"></p>
+            <div class="modal-buttons">
+                <button id="cancelOverwrite" class="cancel">Annulla</button>
+                <button id="confirmOverwrite" class="confirm">Sovrascrivere</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal per i messaggi di completamento -->
+    <div id="completeModal" class="modal">
+        <div class="modal-content">
+            <h3 id="completeModalTitle">Operazione Completata</h3>
+            <p id="completeModalMessage"></p>
+            <div class="modal-buttons">
+                <button id="completeModalOk" class="confirm">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/asn1js/3.0.5/asn1.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pkijs/3.0.14/pkijs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <script>
+        // Elementi DOM
+        const fileInput = document.getElementById('fileInput');
+        const selectFilesButton = document.getElementById('selectFilesButton');
+        const fileList = document.getElementById('fileList');
+        const clearButton = document.getElementById('clearButton');
+        const extractButton = document.getElementById('extractButton');
+        const progressBar = document.getElementById('progressBar');
+        const progressLabel = document.getElementById('progressLabel');
+        const outputLabel = document.getElementById('outputLabel');
+        
+        // Modali
+        const overwriteModal = document.getElementById('overwriteModal');
+        const overwriteMessage = document.getElementById('overwriteMessage');
+        const confirmOverwrite = document.getElementById('confirmOverwrite');
+        const cancelOverwrite = document.getElementById('cancelOverwrite');
+        const completeModal = document.getElementById('completeModal');
+        const completeModalTitle = document.getElementById('completeModalTitle');
+        const completeModalMessage = document.getElementById('completeModalMessage');
+        const completeModalOk = document.getElementById('completeModalOk');
+
+        // Variabili di stato
+        let selectedFiles = [];
+        let isExtracting = false;
+        let currentFileIndex = 0;
+        let successCount = 0;
+        let failedCount = 0;
+        let skippedCount = 0;
+        let overwriteCallback = null;
+
+        // Event listeners
+        selectFilesButton.addEventListener('click', () => {
+            if (!isExtracting) {
+                fileInput.click();
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                let newFilesAdded = 0;
+                
+                // Controlla se il file è già in lista
+                for (const file of e.target.files) {
+                    const exists = selectedFiles.some(f => 
+                        f.name === file.name && f.size === file.size && 
+                        f.lastModified === file.lastModified
+                    );
+                    
+                    if (!exists) {
+                        selectedFiles.push(file);
+                        newFilesAdded++;
+                    }
+                }
+                
+                updateFileList();
+                updateProgressBar(0, selectedFiles.length);
+                
+                if (newFilesAdded > 0) {
+                    progressLabel.textContent = `${newFilesAdded} file aggiunti alla lista.`;
+                } else {
+                    progressLabel.textContent = "Nessun nuovo file aggiunto (già in lista).";
+                }
+            }
+        });
+
+        clearButton.addEventListener('click', () => {
+            if (isExtracting) return;
+            
+            if (selectedFiles.length > 0) {
+                if (confirm("Sei sicuro di voler svuotare la lista dei file selezionati?")) {
+                    selectedFiles = [];
+                    updateFileList();
+                    progressLabel.textContent = "Lista file pulita.";
+                    updateProgressBar(0, 0);
+                }
+            } else {
+                progressLabel.textContent = "La lista è già vuota.";
+            }
+        });
+
+        extractButton.addEventListener('click', startExtraction);
+
+        confirmOverwrite.addEventListener('click', () => {
+            overwriteModal.style.display = 'none';
+            if (overwriteCallback) {
+                overwriteCallback(true);
+                overwriteCallback = null;
+            }
+        });
+
+        cancelOverwrite.addEventListener('click', () => {
+            overwriteModal.style.display = 'none';
+            if (overwriteCallback) {
+                overwriteCallback(false);
+                overwriteCallback = null;
+            }
+        });
+
+        completeModalOk.addEventListener('click', () => {
+            completeModal.style.display = 'none';
+        });
+
+        // Funzioni
+        function updateFileList() {
+            fileList.innerHTML = '';
+            
+            if (selectedFiles.length === 0) {
+                fileList.innerHTML = '<div class="file-item">Nessun file selezionato</div>';
+                return;
+            }
+            
+            selectedFiles.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.textContent = file.name;
+                fileList.appendChild(fileItem);
+            });
+        }
+
+        function updateProgressBar(value, max) {
+            progressBar.value = value;
+            progressBar.max = max;
+        }
+
+        function setGuiState(enabled) {
+            const state = enabled ? false : true;
+            selectFilesButton.disabled = state;
+            clearButton.disabled = state;
+            extractButton.disabled = state;
+            isExtracting = !enabled;
+        }
+
+        function showOverwritePrompt(filename) {
+            return new Promise((resolve) => {
+                overwriteMessage.textContent = `Il file '${filename}' esiste già. Vuoi sovrascriverlo?`;
+                overwriteModal.style.display = 'block';
+                overwriteCallback = resolve;
+            });
+        }
+
+        function showCompleteMessage(title, message) {
+            completeModalTitle.textContent = title;
+            completeModalMessage.textContent = message;
+            completeModal.style.display = 'block';
+        }
+
+        async function startExtraction() {
+            if (isExtracting) return;
+            
+            if (selectedFiles.length === 0) {
+                alert("Nessun file P7M selezionato nella lista!");
+                return;
+            }
+            
+            setGuiState(false);
+            
+            currentFileIndex = 0;
+            successCount = 0;
+            failedCount = 0;
+            skippedCount = 0;
+            
+            updateProgressBar(0, selectedFiles.length);
+            progressLabel.textContent = "Preparazione estrazione...";
+            
+            processNextFile();
+        }
+
+        async function processNextFile() {
+            if (currentFileIndex >= selectedFiles.length) {
+                extractionComplete();
+                return;
+            }
+            
+            const file = selectedFiles[currentFileIndex];
+            progressLabel.textContent = `Elaboro (${currentFileIndex + 1}/${selectedFiles.length}): ${file.name}`;
+            
+            try {
+                await extractP7M(file);
+            } catch (error) {
+                console.error(`Errore nell'estrazione del file ${file.name}:`, error);
+                failedCount++;
+            }
+            
+            currentFileIndex++;
+            updateProgressBar(currentFileIndex, selectedFiles.length);
+            
+            // Processa il prossimo file (asincrono)
+            setTimeout(processNextFile, 0);
+        }
+
+        async function extractP7M(file) {
+            return new Promise(async (resolve, reject) => {
+                try {
+                    // Ottieni il nome del file senza estensione .p7m
+                    let outputName = file.name.toLowerCase().endsWith('.p7m') 
+                        ? file.name.slice(0, -4) 
+                        : file.name + "_extracted";
+                    
+                    // Leggi il file come ArrayBuffer
+                    const fileContent = await readFileAsArrayBuffer(file);
+                    
+                    try {
+                        // Estrai il contenuto con le librerie ASN.1 e PKI.js
+                        let extractedContent = await extractP7MContent(fileContent);
+                        
+                        if (!extractedContent) {
+                            throw new Error("Contenuto non valido o non trovato");
+                        }
+                        
+                        // Proviamo a rilevare il tipo di file dal contenuto
+                        let mimeType = 'application/octet-stream';
+                        const contentView = new Uint8Array(extractedContent);
+                        
+                        // Controlla se è un PDF (inizia con %PDF)
+                        if (contentView.length > 4 && 
+                            contentView[0] === 0x25 && // %
+                            contentView[1] === 0x50 && // P
+                            contentView[2] === 0x44 && // D
+                            contentView[3] === 0x46) { // F
+                            mimeType = 'application/pdf';
+                        }
+                        // Controlla se è un documento XML
+                        else if (contentView.length > 5 && 
+                                contentView[0] === 0x3C && // <
+                                contentView[1] === 0x3F && // ?
+                                contentView[2] === 0x78 && // x
+                                contentView[3] === 0x6D && // m
+                                contentView[4] === 0x6C) { // l
+                            mimeType = 'application/xml';
+                        }
+                        // Controlla se è un'immagine JPEG
+                        else if (contentView.length > 2 && 
+                                contentView[0] === 0xFF && 
+                                contentView[1] === 0xD8) {
+                            mimeType = 'image/jpeg';
+                        }
+                        // Controlla se è un'immagine PNG
+                        else if (contentView.length > 8 && 
+                                contentView[0] === 0x89 && 
+                                contentView[1] === 0x50 && // P
+                                contentView[2] === 0x4E && // N
+                                contentView[3] === 0x47) { // G
+                            mimeType = 'image/png';
+                        }
+                        
+                        // Prova a verificare se è un documento Word o Excel basato sullo standard Office Open XML (docx, xlsx)
+                        if (mimeType === 'application/octet-stream') {
+                            try {
+                                const zip = new JSZip();
+                                const zipContent = await zip.loadAsync(extractedContent);
+                                
+                                // Verifica se contiene file specifici di Word o Excel
+                                if (zipContent.files['word/document.xml']) {
+                                    mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+                                    if (!outputName.toLowerCase().endsWith('.docx')) {
+                                        outputName += '.docx';
+                                    }
+                                } else if (zipContent.files['xl/workbook.xml']) {
+                                    mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+                                    if (!outputName.toLowerCase().endsWith('.xlsx')) {
+                                        outputName += '.xlsx';
+                                    }
+                                }
+                            } catch (zipError) {
+                                // Non è un file ZIP, continuiamo con il tipo generico
+                                console.log("Non è un file ZIP o Office OpenXML:", zipError);
+                            }
+                        }
+                        
+                        // Aggiungi estensione corretta al file se non presente
+                        if (mimeType === 'application/pdf' && !outputName.toLowerCase().endsWith('.pdf')) {
+                            outputName += '.pdf';
+                        } else if (mimeType === 'application/xml' && !outputName.toLowerCase().endsWith('.xml')) {
+                            outputName += '.xml';
+                        } else if (mimeType === 'image/jpeg' && !outputName.toLowerCase().endsWith('.jpg') && !outputName.toLowerCase().endsWith('.jpeg')) {
+                            outputName += '.jpg';
+                        } else if (mimeType === 'image/png' && !outputName.toLowerCase().endsWith('.png')) {
+                            outputName += '.png';
+                        }
+                        
+                        // Crea un Blob con il contenuto estratto e il tipo MIME appropriato
+                        const blob = new Blob([extractedContent], { type: mimeType });
+                        
+                        // Crea un link per il download
+                        const downloadLink = document.createElement('a');
+                        downloadLink.href = URL.createObjectURL(blob);
+                        downloadLink.download = outputName;
+                        
+                        // Avvia il download
+                        downloadLink.click();
+                        
+                        // Rilascia l'URL oggetto
+                        setTimeout(() => URL.revokeObjectURL(downloadLink.href), 100);
+                        
+                        successCount++;
+                        resolve('success');
+                    } catch (error) {
+                        console.error("Errore durante l'elaborazione del P7M:", error);
+                        failedCount++;
+                        resolve('failed'); // Risolviamo con 'failed' invece di reject per continuare il processo
+                    }
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        }
+
+        function readFileAsArrayBuffer(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    resolve(event.target.result);
+                };
+                reader.onerror = (error) => {
+                    reject(error);
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        // Funzione per l'estrazione effettiva del contenuto P7M
+        async function extractP7MContent(p7mData) {
+            try {
+                // Converti ArrayBuffer in una struttura ASN.1 usando asn1js
+                const asn1 = asn1js.fromBER(p7mData);
+                
+                if (asn1.offset === -1) {
+                    throw new Error("Formato ASN.1 non valido");
+                }
+                
+                // Crea un oggetto ContentInfo dalla struttura ASN.1
+                const contentInfo = new pkijs.ContentInfo({ schema: asn1.result });
+                
+                // Verifica che sia un tipo SignedData
+                if (contentInfo.contentType !== "1.2.840.113549.1.7.2") {
+                    throw new Error("Il file non contiene dati firmati (SignedData)");
+                }
+                
+                // Ottieni il SignedData
+                const signedData = new pkijs.SignedData({ schema: contentInfo.content });
+                
+                // Verifica se c'è contenuto incapsulato
+                if (!signedData.encapContentInfo || !signedData.encapContentInfo.eContent) {
+                    throw new Error("Nessun contenuto incapsulato trovato");
+                }
+                
+                // Ottieni il contenuto originale
+                const encapContent = signedData.encapContentInfo.eContent;
+                
+                // Controlla che ci sia un contenuto effettivo
+                if (!encapContent.valueBlock || !encapContent.valueBlock.valueHex) {
+                    throw new Error("Formato del contenuto non valido");
+                }
+                
+                // Restituisci il contenuto originale
+                return encapContent.valueBlock.valueHex;
+                
+            } catch (error) {
+                console.error("Errore nell'estrazione del contenuto P7M:", error);
+                
+                // Fallback: tentiamo un approccio alternativo
+                try {
+                    // Converti ArrayBuffer in una vista
+                    const dataView = new Uint8Array(p7mData);
+                    
+                    // Cerca sequenze che potrebbero indicare l'inizio di un file PDF
+                    // La maggior parte dei PDF inizia con la sequenza "%PDF-"
+                    const pdfSignature = [0x25, 0x50, 0x44, 0x46, 0x2D]; // "%PDF-"
+                    
+                    for (let i = 0; i < dataView.length - pdfSignature.length; i++) {
+                        let found = true;
+                        for (let j = 0; j < pdfSignature.length; j++) {
+                            if (dataView[i + j] !== pdfSignature[j]) {
+                                found = false;
+                                break;
+                            }
+                        }
+                        
+                        if (found) {
+                            console.log("Trovata firma PDF alla posizione:", i);
+                            return dataView.slice(i).buffer;
+                        }
+                    }
+                    
+                    throw new Error("Nessun contenuto PDF trovato nel file");
+                } catch (fallbackError) {
+                    console.error("Errore nel fallback:", fallbackError);
+                    throw error; // Rilancia l'errore originale
+                }
+            }
+        }
+
+        function extractionComplete() {
+            const totalFiles = selectedFiles.length;
+            const message = `Estrazione completata!\n\n` +
+                           `File totali selezionati: ${totalFiles}\n` +
+                           `Elaborati con successo: ${successCount}\n` +
+                           `Saltati (non sovrascritti): ${skippedCount}\n` +
+                           `Errori: ${failedCount}`;
+            
+            if (failedCount > 0) {
+                showCompleteMessage("Completato con Errori", message);
+            } else if (successCount === 0 && skippedCount === 0) {
+                showCompleteMessage("Errore", "Nessun file è stato elaborato. Controllare i file.");
+            } else {
+                showCompleteMessage("Completato", message);
+            }
+            
+            // Pulisci la lista dei file
+            selectedFiles = [];
+            updateFileList();
+            
+            // Resetta progress bar e label
+            updateProgressBar(0, 0);
+            progressLabel.textContent = "Pronto.";
+            
+            // Riabilita i controlli
+            setGuiState(true);
+        }
+
+        // Inizializzazione
+        updateFileList();
+    </script>
+</body>
+</html>
