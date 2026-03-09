@@ -74,4 +74,4 @@ Per gestire la selezione multipla di file dal tasto destro (Windows lancia il pr
 
 ## Licenza
 
-MIT License — libero uso, modifica e distribuzione.
+GPLv3
